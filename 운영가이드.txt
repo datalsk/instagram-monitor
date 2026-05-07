@@ -9,23 +9,23 @@
 인스타그램 계정(@family_koreanfood)에 새 메뉴 게시물이
 올라오면 지정된 Slack 사용자들에게 자동으로 DM을 보내는 시스템.
 
-- 플랫폼 : AWS Lambda + EventBridge + DynamoDB
+- 플랫폼 : GitHub Actions + DynamoDB (AWS)
 - 알림 채널 : Slack (my chatbot 앱 DM)
 - 실행 주기 : 매일 KST 10:30 ~ 11:30, 5분 간격
+- 리포지토리 : https://github.com/datalsk/instagram-monitor
 
 
 ------------------------------------------------------
 2. 동작 흐름
 ------------------------------------------------------
-1) EventBridge가 5분마다 Lambda 함수 실행
-2) 현재 시각이 KST 10:30~11:30 범위 밖이면 즉시 종료
-3) RSS 피드에서 최신 게시물 가져오기
-4) DynamoDB에 저장된 마지막 게시물과 비교
+1) GitHub Actions 스케줄러가 5분마다 워크플로우 실행
+2) Playwright(헤드리스 브라우저)로 Instagram 최신 게시물 수집
+3) DynamoDB에 저장된 마지막 게시물과 비교
    - 동일 → 종료 (중복 발송 없음)
    - 새 게시물 → 다음 단계 진행
-5) Claude AI로 메뉴 내용 요약
-6) SLACK_USER_IDS에 등록된 모든 사용자에게 DM 전송
-7) DynamoDB 마커 업데이트 (다음 실행 시 중복 방지)
+4) OpenAI(gpt-4o-mini)로 메뉴 내용 요약
+5) SLACK_USER_IDS에 등록된 모든 사용자에게 DM 전송
+6) DynamoDB 마커 업데이트 (다음 실행 시 중복 방지)
 
 
 ------------------------------------------------------
@@ -39,12 +39,13 @@
 2) .env 파일 수정
    SLACK_USER_IDS=기존ID,새로운ID
 
-3) 재배포
-   python deploy_boto3.py
+3) GitHub Secret 업데이트
+   - https://github.com/datalsk/instagram-monitor/settings/secrets/actions
+   - SLACK_USER_IDS 항목 클릭 → 새 값으로 수정
 
 [수신자 제거 방법]
 1) .env 파일에서 해당 ID 삭제
-2) 재배포 : python deploy_boto3.py
+2) GitHub Secret SLACK_USER_IDS 동일하게 수정
 
 [현재 수신자 목록]
 - U08HHKNBTMG : 이승규_프로 (Victor)
@@ -56,75 +57,74 @@
 
 
 ------------------------------------------------------
-4. 재배포 방법
+4. 코드 수정 및 배포 방법
 ------------------------------------------------------
-.env 파일 수정 후 아래 명령 실행:
+코드 수정 후 GitHub에 push하면 자동 반영됨.
 
-  python deploy_boto3.py
+  git add .
+  git commit -m "수정 내용"
+  git push
 
-재배포 항목:
-- Lambda 함수 코드 및 환경 변수
-- EventBridge 스케줄 규칙
-
-※ DynamoDB 테이블과 IAM 역할은 이미 존재하면 건너뜀
+※ 환경 변수(.env) 값 변경 시 GitHub Secret도 함께 수정 필요
+   → https://github.com/datalsk/instagram-monitor/settings/secrets/actions
 
 
 ------------------------------------------------------
 5. 테스트 방법
 ------------------------------------------------------
-1) DynamoDB 마커 초기화 (이전 게시물 기록 삭제)
-   - AWS 콘솔 → DynamoDB → instagram-monitor-state
-   - pk = 'state#family_koreanfood' 항목 삭제
+[로컬 직접 실행]
+  python run.py
 
-2) Lambda 수동 실행
-   - AWS 콘솔 → Lambda → instagram-monitor → 테스트
+[GitHub Actions 수동 실행]
+  https://github.com/datalsk/instagram-monitor/actions
+  → Instagram Monitor → Run workflow 버튼 클릭
 
-※ 시간 필터(10:30~11:30) 적용 중이므로
-   해당 시간 외 테스트 시 시간 필터를 임시로 주석 처리 후 재배포 필요
-
-   [lambda_function.py 수정]
-   # if not _in_active_window():
-   #     return {"statusCode": 200, "body": "outside active window"}
-
-   테스트 완료 후 반드시 원복 및 재배포
+[중복 방지 마커 초기화 (재발송 테스트 시)]
+  AWS 콘솔 → DynamoDB → instagram-monitor-state
+  → pk = 'state#family_koreanfood' 항목 삭제
 
 
 ------------------------------------------------------
-6. 주요 환경 변수 (.env)
+6. 주요 환경 변수 (.env / GitHub Secrets)
 ------------------------------------------------------
 AWS_ACCESS_KEY_ID      : AWS 액세스 키
 AWS_SECRET_ACCESS_KEY  : AWS 시크릿 키
 AWS_REGION             : ap-northeast-2 (서울)
-ANTHROPIC_API_KEY      : Claude AI API 키
+OPENAI_API_KEY         : OpenAI API 키
+OPENAI_MODEL           : gpt-4o-mini
 SLACK_BOT_TOKEN        : Slack Bot Token (xoxb-로 시작)
 SLACK_USER_IDS         : 수신자 User ID (콤마로 구분)
 INSTAGRAM_ACCOUNTS     : 모니터링 계정 (@ 제외)
-RSS_FEED_URL           : rss.app RSS 피드 URL
 DYNAMODB_TABLE         : instagram-monitor-state
-CLAUDE_MODEL           : claude-haiku-4-5-20251001
 
 
 ------------------------------------------------------
-7. AWS 리소스
+7. 인프라 리소스
 ------------------------------------------------------
-- Lambda 함수   : instagram-monitor (ap-northeast-2)
-- DynamoDB 테이블 : instagram-monitor-state
-- EventBridge 규칙 : instagram-monitor-schedule (rate 5분)
-- IAM 역할      : instagram-monitor-role
-- CloudWatch 로그 : /aws/lambda/instagram-monitor
+[GitHub]
+- 리포지토리    : https://github.com/datalsk/instagram-monitor
+- 워크플로우    : .github/workflows/monitor.yml
+- Secrets      : 리포 Settings → Secrets and variables → Actions
+
+[AWS]
+- DynamoDB 테이블 : instagram-monitor-state (ap-northeast-2)
+- IAM 역할       : instagram-monitor-role
+- Lambda 함수    : instagram-monitor (비활성화 상태, 미사용)
 
 
 ------------------------------------------------------
 8. 문제 발생 시 확인 순서
 ------------------------------------------------------
-1) AWS CloudWatch → 로그 그룹 /aws/lambda/instagram-monitor
-   → 최근 로그 스트림에서 ERROR 메시지 확인
+1) GitHub Actions 실행 로그 확인
+   https://github.com/datalsk/instagram-monitor/actions
+   → 최근 실행 클릭 → monitor 잡 → 로그 확인
 
 2) 주요 에러 유형
-   - missing_scope  : Slack Bot Token 권한 부족
-                      → api.slack.com/apps → OAuth & Permissions
-                        → chat:write 권한 추가 후 재설치
-   - RSS_FEED_URL 없음 : .env에 RSS_FEED_URL 누락
-   - 메시지 미발송  : DynamoDB 마커 확인 (이미 동일 게시물로 처리됐을 수 있음)
+   - HTTP 429  : Instagram 요청 차단 (일시적, 재시도 대기)
+   - missing_scope : Slack Bot Token 권한 부족
+                    → api.slack.com/apps → OAuth & Permissions
+                      → chat:write 권한 추가 후 재설치
+   - 메시지 미발송 : DynamoDB 마커 확인
+                    (이미 동일 게시물로 처리됐을 수 있음)
 
 ======================================================
