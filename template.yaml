@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Instagram new-post monitor → Slack DM (Lambda + EventBridge + DynamoDB)
+
+Parameters:
+  InstagramAccounts:
+    Type: String
+    Default: "family_koreanfood"
+    Description: "콤마로 구분된 인스타그램 계정명 (@ 제외)"
+  OpenAiApiKey:
+    Type: String
+    NoEcho: true
+  SlackWebhookUrl:
+    Type: String
+    NoEcho: true
+    Description: "Slack Incoming Webhook URL (본인 DM)"
+  SlackWebhookUrl2:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: "Slack Incoming Webhook URL (팀원 DM, 선택)"
+  PollIntervalMinutes:
+    Type: String
+    Default: "10"
+    Description: "인스타 확인 주기 (분). 매일 10:00~11:30 KST 구간에서 실행"
+
+Globals:
+  Function:
+    Timeout: 120
+    MemorySize: 256
+    Runtime: python3.12
+    Environment:
+      Variables:
+        DYNAMODB_TABLE: !Ref StateTable
+        INSTAGRAM_ACCOUNTS: !Ref InstagramAccounts
+        OPENAI_API_KEY: !Ref OpenAiApiKey
+        SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+        SLACK_WEBHOOK_URL_2: !Ref SlackWebhookUrl2
+        OPENAI_MODEL: "gpt-4o-mini"
+
+Resources:
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: instagram-monitor-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  MonitorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: instagram-monitor
+      CodeUri: .
+      Handler: lambda_function.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref StateTable
+      Events:
+        Poll:
+          Type: Schedule
+          Properties:
+            # UTC 기준 → KST = UTC+9
+            # 매일 01:00~02:30 UTC (KST 10:00~11:30) 구간에서 10분마다 실행
+            # Lambda 내부에서 시간대 필터로 구간 외 조기 종료
+            Schedule: !Sub "rate(${PollIntervalMinutes} minutes)"
+            Description: Instagram new post polling (KST 10:00-11:30, 10min interval)
+            Enabled: false
+
+Outputs:
+  FunctionArn:
+    Value: !GetAtt MonitorFunction.Arn
+  TableName:
+    Value: !Ref StateTable
