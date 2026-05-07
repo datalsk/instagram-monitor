@@ -1,20 +1,8 @@
-import json
-import urllib.request
 import logging
 from datetime import datetime, timezone
+from playwright.sync_api import sync_playwright
 
 logger = logging.getLogger(__name__)
-
-_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "*/*",
-    "Accept-Language": "ko-KR,ko;q=0.9",
-    "X-IG-App-ID": "936619743392459",
-    "X-Requested-With": "XMLHttpRequest",
-    "Referer": "https://www.instagram.com/",
-}
-
-_API = "https://www.instagram.com/api/v1/users/web_profile_info/?username={}"
 
 
 class InstagramFetcher:
@@ -22,13 +10,36 @@ class InstagramFetcher:
         pass
 
     def get_latest_post(self, username: str) -> dict | None:
-        url = _API.format(username)
-        req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 720},
+                locale="ko-KR",
+            )
 
-        user = data.get("data", {}).get("user", {})
-        edges = user.get("edge_owner_to_timeline_media", {}).get("edges", [])
+            captured = {}
+
+            def on_response(response):
+                if "web_profile_info" in response.url and response.status == 200:
+                    try:
+                        data = response.json()
+                        edges = (data.get("data", {})
+                                     .get("user", {})
+                                     .get("edge_owner_to_timeline_media", {})
+                                     .get("edges", []))
+                        if edges:
+                            captured["edges"] = edges
+                    except Exception:
+                        pass
+
+            page = context.new_page()
+            page.on("response", on_response)
+            page.goto(f"https://www.instagram.com/{username}/",
+                      wait_until="networkidle", timeout=30000)
+            browser.close()
+
+        edges = captured.get("edges")
         if not edges:
             logger.info(f"@{username} — 게시물 없음")
             return None
@@ -40,7 +51,6 @@ class InstagramFetcher:
 
         cap_edges = node.get("edge_media_to_caption", {}).get("edges", [])
         caption = cap_edges[0]["node"]["text"] if cap_edges else ""
-
         image_url = node.get("display_url") or node.get("thumbnail_src")
         post_url = f"https://www.instagram.com/p/{shortcode}/"
         marker = caption.split("\n")[0].strip()[:80] if caption else shortcode
