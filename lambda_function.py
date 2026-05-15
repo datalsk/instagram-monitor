@@ -27,10 +27,6 @@ def lambda_handler(event, context):
             _process_account(account, fetcher, summarizer, storage, notifier)
         except Exception as e:
             logger.error(f"Unhandled error for @{account}: {e}", exc_info=True)
-            try:
-                notifier.send_error(account, str(e))
-            except Exception:
-                pass
 
     return {"statusCode": 200}
 
@@ -60,8 +56,11 @@ def _process_account(account, fetcher, summarizer, storage, notifier):
     logger.info(f"@{account} — new post detected!")
     summary = summarizer.summarize(account, latest_post)
 
-    # 5. Slack DM 전송 (이미지 첨부)
-    notifier.send_new_post(account, summary, latest_post.get("image_url"))
+    # 5. 메뉴 게시물일 때만 Slack DM 전송 (이미지 첨부)
+    if summary.startswith("🍱"):
+        notifier.send_new_post(account, summary, latest_post.get("image_url"))
+    else:
+        logger.info(f"@{account} — 메뉴 게시물 아님, Slack 전송 생략")
 
     # 6. 전송 성공 시만 마커 업데이트 (실패 시 예외가 터져서 여기 도달 안 함)
     storage.update_state(account, current_marker)
